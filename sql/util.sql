@@ -7,7 +7,10 @@ and f.id=s.fixture_id
 and p.id=s.player_id
 
 -- top scorers
-select p.name,count(value) as goals from stat s,player p where stat_type_id=1 and p.id=player_id group by p.name order by goals desc;
+select p.name,count(value) as goals from stat s,player p 
+where stat_type_id=1 and p.id=player_id
+group by p.name
+order by goals desc;
 
 -- players
 select id,concat(number,':',name) from player order by number;
