@@ -1,6 +1,5 @@
 #!/usr/bin/perl
 
-# bug: have to manually add players with INSERT INTO player ...
 # delete from player; alter table player auto_increment=1;
 # rfe: add phone number to player (and print on matchdays!)
 
@@ -12,7 +11,7 @@ fbw - facebook wanderers stats
 
 =head1 SYNOPSIS
 
-  [perl -Mlib=lib bin/]fbw [--squad] [--result date] [--file file]
+  fbw [--squad] [--result date] [--file file]
 
 =cut
 
