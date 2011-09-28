@@ -1,5 +1,5 @@
 package FBW::Schema::Result::Team;
-use base qw/DBIx::Class::Core/;
+use parent qw/DBIx::Class::Core/;
 __PACKAGE__->table('team');
 __PACKAGE__->add_columns(qw/id name bib fixture_id/);
 __PACKAGE__->set_primary_key('id');

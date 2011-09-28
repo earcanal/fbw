@@ -1,5 +1,5 @@
 package FBW::Schema::Result::Fixture;
-use base qw/DBIx::Class::Core/;
+use parent qw/DBIx::Class::Core/;
 __PACKAGE__->table('fixture');
 __PACKAGE__->add_columns(qw/id dt weather motm t1 t2/);
 __PACKAGE__->set_primary_key('id');
