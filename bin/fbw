@@ -1,0 +1,196 @@
+#!/usr/bin/perl
+
+# delete from player; alter table player auto_increment=1;
+# rfe: add phone number to player (and print on matchdays!)
+
+=pod
+
+=head1 NAME fbw
+
+fbw - facebook wanderers stats
+
+=head1 SYNOPSIS
+
+  fbw [--squad] [--result date] [--file file]
+
+=cut
+
+use warnings;
+use strict;
+use DBI;
+use Text::CSV;
+use IO::File;
+use Data::Dumper;
+use Date::Manip;
+use FBW::Schema;
+use Getopt::Long;
+use Pod::Usage;
+
+my $f          = $ARGV[0];
+my $dsn        = 'DBI:mysql:database=fbw;host=localhost';
+my $user       = 'paul';
+my $pass       = '';
+my %dbi_params = (RaiseError=>0);
+my $schema     = FBW::Schema->connect($dsn,$user,$pass,\%dbi_params);
+#$schema->storage->debug(1);
+my $dbh        = DBI->connect($dsn,$user,$pass,\%dbi_params);
+# handle 'DBD::mysql::st execute failed: MySQL server has gone away'?
+$dbh->{'mysql_auto_reconnect'} = 1;
+my $sth;
+
+my $squad = '';
+my $file  = '';
+my $date  = '';
+GetOptions('squad' => \$squad,'file=s' => \$file,'result=s' => \$date);
+$file  && &file()        && exit(0);
+$squad && &squad()       && exit(0);
+$date  && &result($date) && exit(0);
+
+pod2usage();
+
+sub file {
+  my $io  = IO::File->new($file,'r') or die "couldn't open file $file: $!\n";
+  my $csv = Text::CSV->new({sep_char=>':'});
+  my($fid,$fixture,$b,$nb);
+  while (my $ar = $csv->getline($io)) {
+    last if $csv->eof;
+    my @a = @$ar;
+
+    # fixture
+    if ($a[0] =~ /Fixture/i) {
+      #fixme: add time
+      my $ud = UnixDate($a[1],"%Y-%m-%d");
+      my @r = $schema->resultset('Fixture')->search({dt => $ud});
+      unless ($r[0]) { # fixture already exists
+	$sth = $dbh->prepare('INSERT INTO fixture(id,dt,weather) VALUES(NULL,?,?)');
+	query([$ud,$a[2]]);
+	@r = $schema->resultset('Fixture')->search({dt => $ud});
+      }
+      $fid = $r[0]->id;
+      $fixture = $r[0];
+      next;
+    }
+
+    # player
+    if ($a[0] =~ /\d+/) {
+      my $p = $schema->resultset('Player')->find({number => $a[0]});
+      die unless $p;
+      my($t,%f);
+      if ($a[2] eq 'B') {        # bib
+	%f = (bib=>1,fixture_id=>$fid);
+	$t = $schema->resultset('Team')->find(\%f);
+	unless ($t) {
+	  $f{name} = 'Bibs';
+	  $t = $schema->resultset('Team')->create(\%f);
+	}
+	$b = $t;
+      } elsif ($a[2] eq 'NB' ) { # non-bib
+	%f = (bib=>0,fixture_id=>$fid);
+	$t = $schema->resultset('Team')->find(\%f);
+	unless ($t) {
+	  $f{name} = 'Non-Bibs';
+	  $t = $schema->resultset('Team')->create(\%f);
+	}
+	$nb = $t;
+      } else {                   # unknown team
+	die @a;
+      }
+      if (defined($a[3]) && $a[3] eq 'Manager') {
+	my %f = (stat_type_id => 2,
+		 fixture_id   => $fixture->id,
+		 player_id    => $p->id,
+		 value        => 1);
+	# fixme: only create once!
+	$schema->resultset('Stat')->search(\%f)->delete;
+	$schema->resultset('Stat')->create(\%f);
+      }
+      $p->add_to_teams($t) unless $p->teams->find({id=>$t->id});
+
+      # GOAAAAAL!
+      defined($a[4]) && $p->goals($fixture,$a[4]);
+      next;
+    }
+  }
+  $io->close();
+
+  # set fixture teams
+  $fixture->t1($b->id);
+  $fixture->t2($nb->id);
+  $fixture->update;
+}
+
+=head2 result
+
+Prints the result of a fixture.
+
+=cut
+
+sub result {
+  my $f = $schema->resultset('Fixture')->search(
+    {dt => ud($_[0])},
+    {select => ['id',{ DATE_FORMAT => [{ DATE => 'dt' },'"%D %M %Y"']},
+		't1','t2'],
+     as     => [qw/id dt t1 t2/]})->single;
+  die unless $f;
+  print 'Result: ',$f->dt,"\n\n";
+  print $f->bib->name,"\n";
+  team($f,'bib');
+  print "\n",$f->nonbib->name,"\n";
+  team($f,'nonbib');
+  1;
+}
+
+=pod
+
+select count(tp.player_id) from stat s,team_player tp
+where s.fixture_id=3
+and stat_type_id=1
+and s.player_id=tp.player_id
+and tp.team_id=14
+
+=cut
+
+sub team {
+  my($f,$team) = @_;
+  my %attr = (order_by => {-asc => [qw/number/]});
+  for ($f->$team->players->search(undef,\%attr)) {
+    # FIXME: choose random nick
+    my @aka = $_->search_related('aka')->all;
+    print squad_number($_->number),' ',$_->name;
+    print ' \'' . $aka[0]->name . '\'' if $aka[0];
+    print ' (Manager)' if $_->manager($f);
+    my @g;
+    for my $g ($_->goals($f)) { push (@g,$g->value) }
+    @g && print ' [',join(',',@g),'] ';
+    print "\n";
+  }
+}
+
+=head2 squad
+
+Prints squad members in a format that helps future ingestion.
+
+=cut
+
+sub squad {
+  my @p = $schema->resultset('Player')->search(undef,{order_by=>{-asc=>'number'}});
+  for (@p) {
+    my $n = squad_number($_->number);
+    print "$n:",$_->name,":B/NB:\n";
+  }
+  1;
+}
+
+sub squad_number { return ($_[0] < 10) ? "0$_[0]" : $_[0] }
+
+sub query {
+  my $ph = shift;
+#  $main::logger->debug($_[0]);
+  if ($ph) {
+    $sth->execute(@$ph) or die $sth->errstr . "\n$_[0]";
+  } else {
+    $sth->execute       or die $sth->errstr . "\n$_[0]";
+  }
+}
+
+sub ud { return UnixDate($_[0],"%Y-%m-%d") }
